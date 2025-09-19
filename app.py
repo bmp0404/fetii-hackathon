@@ -742,21 +742,32 @@ def extract_universal_filters(question):
     if re.search(r'(weekend.*weekday|weekday.*weekend|weekend.*vs.*weekday|weekday.*vs.*weekend)', question_lower):
         filters["time_comparison"] = "weekend_vs_weekday"
 
-    # Age ranges
-    age_range_match = re.search(r'age.*between\s+(\d+)\s+and\s+(\d+)', question_lower)
-    if age_range_match:
-        filters["min_age"] = int(age_range_match.group(1))
-        filters["max_age"] = int(age_range_match.group(2))
+    # Age ranges - multiple patterns to catch different formats
+    age_patterns = [
+        r'age.*between\s+(\d+)\s+and\s+(\d+)',  # "age between 18 and 21"
+        r'for\s+(\d+)-(\d+)\s+year',            # "for 18-21 year olds"
+        r'ages?\s+(\d+)-(\d+)',                 # "ages 18-21"
+        r'(\d+)\s+to\s+(\d+)\s+year',          # "18 to 21 year olds"
+        r'(\d+)-(\d+)\s+year\s+olds?'          # "18-21 year olds"
+    ]
+
+    for pattern in age_patterns:
+        age_match = re.search(pattern, question_lower)
+        if age_match:
+            filters["min_age"] = int(age_match.group(1))
+            filters["max_age"] = int(age_match.group(2))
+            break
 
     # Young vs old comparison
     if re.search(r'(young.*old|old.*young|young.*vs.*old|old.*vs.*young)', question_lower):
         filters["age_comparison"] = "young_vs_old"
 
-    # Destination filtering
+    # Destination filtering - be more specific to avoid false matches
     destination_patterns = [
-        r'to\s+([^?]+?)(?:\s+(?:on|during|for)|\s*\?|$)',
-        r'going.*to\s+([^?]+?)(?:\s+(?:on|during|for)|\s*\?|$)',
-        r'at\s+([^?]+?)(?:\s+(?:on|during|for)|\s*\?|$)'
+        r'\btrips?\s+to\s+([^?]+?)(?:\s+(?:on|during|for)|\s*\?|$)',
+        r'\bgoing\s+to\s+([^?]+?)(?:\s+(?:on|during|for)|\s*\?|$)',
+        r'\bat\s+([a-zA-Z][^?]+?)(?:\s+(?:on|during|for)|\s*\?|$)',
+        r'\bhow many.*to\s+([^?]+?)(?:\s+(?:on|during|for)|\s*\?|$)'
     ]
     for pattern in destination_patterns:
         dest_match = re.search(pattern, question_lower)
@@ -764,7 +775,8 @@ def extract_universal_filters(question):
             destination = dest_match.group(1).strip()
             # Clean up common words that aren't part of destination
             destination = re.sub(r'\b(the|a|an)\s+', '', destination).strip()
-            if len(destination) > 2:  # Avoid single letters or very short matches
+            # More restrictive validation
+            if len(destination) > 2 and not re.search(r'\b(average|age|what|how|when|where|why)\b', destination):
                 filters["destination"] = destination
                 break
 
@@ -1064,29 +1076,80 @@ with st.sidebar:
     hourly_chart.update_layout(height=200, margin=dict(l=0, r=0, t=0, b=0))
     st.plotly_chart(hourly_chart, use_container_width=True)
 
-# Enhanced example questions organized by category
-st.markdown("### 💡 Try These Example Questions")
+# Basic example questions
+with st.expander("💡 **Basic Example Questions**", expanded=False):
+    example_categories = {
+        "📍 Destinations": [
+            "How many trips went to the Moody Center?",
+            "What are the top 5 most popular destinations?"
+        ],
+        "⏰ Time Patterns": [
+            "What time do most people ride?",
+            "What are the busiest days of the week?"
+        ],
+        "👥 Demographics": [
+            "What is the average age of passengers?",
+            "How many large groups book rides?"
+        ]
+    }
 
-example_categories = {
-    "📍 Destinations": [
-        "How many trips went to the Moody Center?",
-        "What are the top 5 most popular destinations?"
-    ],
-    "⏰ Time Patterns": [
-        "What time do most people ride?",
-        "What are the busiest days of the week?"
-    ],
-    "👥 Demographics": [
-        "What is the average age of passengers?",
-        "How many large groups book rides?"
+    for category, questions in example_categories.items():
+        st.markdown(f"**{category}**")
+        cols = st.columns(len(questions))
+        for i, question in enumerate(questions):
+            if cols[i].button(question, key=f"{category}_{i}"):
+                st.session_state.user_question = question
+
+with st.expander("🎯 **Advanced Question Examples**", expanded=False):
+    st.markdown("*These demonstrate the enhanced filtering and intelligence capabilities*")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("#### ⚡ **Simple Enhanced Queries**")
+        st.markdown("*Fast responses with enhanced filtering*")
+
+        simple_questions = [
+            "What's the average age for day vs night trips?",
+            "Top 3 destinations for 18-21 year olds",
+            "Group sizes on weekends vs weekdays",
+            "How many trips to UT on Fridays?"
+        ]
+
+        for i, question in enumerate(simple_questions):
+            if st.button(question, key=f"simple_{i}"):
+                st.session_state.user_question = question
+
+    with col2:
+        st.markdown("#### 🚫 **Handled Edge Cases**")
+        st.markdown("*Questions that get helpful explanations*")
+
+        edge_questions = [
+            "How many trips were longer than 5 miles?",
+            "How many people will go to Rainey Street next weekend?",
+            "What's the average trip distance?",
+            "Will there be more riders next month?"
+        ]
+
+        for i, question in enumerate(edge_questions):
+            if st.button(question, key=f"edge_{i}"):
+                st.session_state.user_question = question
+
+    st.markdown("---")
+    st.markdown("#### 🤖 **Complex Analysis (AI Agent)**")
+    st.markdown("*These automatically route to the AI agent for sophisticated analysis*")
+
+    complex_cols = st.columns(2)
+    complex_questions = [
+        "What's the correlation between age and group size?",
+        "Analyze the relationship between destination and time patterns",
+        "Calculate the percentage increase in ridership trends",
+        "Why do certain destinations attract younger riders?"
     ]
-}
 
-for category, questions in example_categories.items():
-    st.markdown(f"**{category}**")
-    cols = st.columns(len(questions))
-    for i, question in enumerate(questions):
-        if cols[i].button(question, key=f"{category}_{i}"):
+    for i, question in enumerate(complex_questions):
+        col_idx = i % 2
+        if complex_cols[col_idx].button(question, key=f"complex_{i}"):
             st.session_state.user_question = question
 
 # This section is now handled above in the categorized examples

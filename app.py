@@ -44,12 +44,17 @@ def load_and_prepare_data(filepath):
 @st.cache_data
 def get_dashboard_metrics(df):
     """Pre-compute key metrics for dashboard display"""
+    # Load raw checkins data for accurate group size calculation
+    import pandas as pd
+    checkins_df = pd.read_excel('fetii_data.xlsx', sheet_name='Checked in User ID\'s')
+    actual_group_sizes = checkins_df.groupby('Trip ID').size()
+
     return {
         'total_trips': len(df),
         'total_destinations': df['Drop Off Address'].nunique(),
         'peak_hour': df.groupby('hour_of_day').size().idxmax(),
         'peak_day': df['day_of_week'].value_counts().index[0],
-        'avg_group_size': df.groupby('Trip ID').size().mean(),
+        'avg_group_size': actual_group_sizes.mean(),
         'popular_dest': df['Drop Off Address'].value_counts().index[0]
     }
 

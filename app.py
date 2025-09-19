@@ -59,6 +59,52 @@ def get_destination_stats(df):
     return df['Drop Off Address'].value_counts()
 
 @st.cache_data
+def get_grouped_destination_stats(df):
+    """Cache grouped destination statistics with venue variations"""
+    import re
+
+    def normalize_venue_name(address):
+        """Extract and normalize the main venue name from an address"""
+        if pd.isna(address):
+            return "unknown"
+
+        address = str(address).lower()
+
+        # Extract the part before the first comma (usually the venue name)
+        venue_part = address.split(',')[0].strip()
+
+        # Remove common suffixes and normalize
+        venue_part = re.sub(r"['']s?\s*(pub|bar|restaurant|grill|cafe|coffee|shop|store|center|building)$", "'s", venue_part)
+        venue_part = re.sub(r"\s*(pub|bar|restaurant|grill|cafe|coffee|shop|store|center|building)$", "", venue_part)
+        venue_part = re.sub(r"['']s?$", "'s", venue_part)  # Standardize possessives
+
+        return venue_part.strip()
+
+    # Get all destinations with their normalized names
+    df_with_normalized = df.copy()
+    df_with_normalized['normalized_venue'] = df_with_normalized['Drop Off Address'].apply(normalize_venue_name)
+
+    # Group by normalized venue name
+    grouped_stats = {}
+    for normalized_name in df_with_normalized['normalized_venue'].unique():
+        if normalized_name == "unknown":
+            continue
+
+        # Get all variations for this normalized venue
+        variations = df_with_normalized[df_with_normalized['normalized_venue'] == normalized_name]['Drop Off Address'].value_counts()
+        total_count = variations.sum()
+
+        grouped_stats[normalized_name] = {
+            'total_count': total_count,
+            'variations': variations.to_dict()
+        }
+
+    # Sort by total count
+    sorted_venues = sorted(grouped_stats.items(), key=lambda x: x[1]['total_count'], reverse=True)
+
+    return dict(sorted_venues)
+
+@st.cache_data
 def get_time_patterns(df):
     """Cache time-based patterns"""
     hourly = df.groupby('hour_of_day').size()
@@ -82,7 +128,7 @@ def handle_count_trips(df, filters):
     """
     destination_keyword = filters.get("destination", "").lower()
     if not destination_keyword:
-        return "You need to specify a destination to count trips."
+        return "**Error:** You need to specify a destination to count trips."
 
     # Strip common articles for better matching
     destination_keyword = re.sub(r'\b(the|a|an)\s+', '', destination_keyword).strip()
@@ -90,20 +136,74 @@ def handle_count_trips(df, filters):
     filtered_df = df[df['Drop Off Address'].str.contains(destination_keyword, na=False)]
     count = len(filtered_df)
 
-    return f"Based on the data, there were {count} trips to locations containing '{filters.get('destination')}'. 🚐"
+    # Clean response formatting
+    original_dest = filters.get('destination', '').title()
+
+    if count == 0:
+        response = f"## Trip Search Results\n\n"
+        response += f"**Destination:** *{original_dest}*\n\n"
+        response += f"**No trips found** to locations containing '{original_dest}'\n\n"
+        response += "*Try searching with different keywords or check the spelling*"
+    else:
+        response = f"## Trip Count Results\n\n"
+        response += f"**Destination:** *{original_dest}*\n\n"
+        response += f"**{count:,} trips** found to locations containing '{original_dest}'\n\n"
+
+        # Show a few examples if there are matches
+        if count > 0:
+            sample_destinations = filtered_df['Drop Off Address'].value_counts().head(3)
+            response += "**Sample Locations:**\n"
+            for dest, dest_count in sample_destinations.items():
+                response += f"- *{dest.title()}* ({dest_count} trips)\n"
+
+            if len(sample_destinations) < count:
+                remaining = count - sample_destinations.sum()
+                response += f"- *...and {remaining} more trips*\n"
+
+    return response
 
 def handle_top_destinations(df, filters):
     """
     Handles the 'top_destinations' intent.
-    Finds the most frequent drop-off locations.
+    Finds the most frequent drop-off locations with grouped venue variations.
     """
     top_n = filters.get("limit", 5)
-    dest_stats = get_destination_stats(df)  # Use cached stats
-    top_destinations = dest_stats.nlargest(top_n)
+    grouped_stats = get_grouped_destination_stats(df)
 
-    response = f"Here are the top {top_n} destinations:\n"
-    for dest, count in top_destinations.items():
-        response += f"- {dest.title()}: {count} trips\n"
+    # Get top N venues by total count
+    top_venues = list(grouped_stats.items())[:top_n]
+
+    response = f"## Top {top_n} Most Popular Destinations\n\n"
+
+    for i, (venue_name, stats) in enumerate(top_venues, 1):
+        total_count = stats['total_count']
+        variations = stats['variations']
+
+        # Format the main venue name nicely
+        display_name = venue_name.replace("'s", "'s").title()
+
+        if len(variations) == 1:
+            # Single variation - show normally with clean formatting
+            address = list(variations.keys())[0]
+            location = ', '.join(address.split(',')[1:]).strip().title()
+            response += f"### {i}. **{display_name}**\n"
+            response += f"*Location:* {location}  \n"
+            response += f"**{total_count:,} trips**\n\n"
+        else:
+            # Multiple variations - show grouped with breakdown
+            response += f"### {i}. **{display_name}**\n"
+            response += f"**{total_count:,} trips total**\n\n"
+            response += "**Address Variations:**\n"
+            for j, (address, count) in enumerate(sorted(variations.items(), key=lambda x: x[1], reverse=True), 1):
+                # Format address nicely
+                venue_detail = address.split(',')[0].strip().title()
+                location = ', '.join(address.split(',')[1:]).strip().title()
+                response += f"- **{venue_detail}** - *{location}* ({count:,} trips)\n"
+            response += "\n"
+
+    response += "---\n"
+    response += f"*Showing destinations with the highest ridership volume*"
+
     return response
 
 def handle_time_analysis(df, filters):
@@ -113,9 +213,47 @@ def handle_time_analysis(df, filters):
     time_patterns = get_time_patterns(df)
     peak_hour = time_patterns['hourly'].idxmax()
     peak_count = time_patterns['hourly'].max()
+    peak_day = time_patterns['daily'].idxmax()
+    peak_day_count = time_patterns['daily'].max()
 
-    response = f"Peak riding time is {peak_hour}:00 with {peak_count} trips. "
-    response += f"Most popular day is {time_patterns['daily'].idxmax()} with {time_patterns['daily'].max()} trips."
+    # Format hour display
+    hour_display = f"{peak_hour:02d}:00"
+    if peak_hour == 0:
+        hour_display = "12:00 AM"
+    elif peak_hour < 12:
+        hour_display = f"{peak_hour}:00 AM"
+    elif peak_hour == 12:
+        hour_display = "12:00 PM"
+    else:
+        hour_display = f"{peak_hour-12}:00 PM"
+
+    response = f"## Ride Time Analysis\n\n"
+
+    response += f"### **Peak Hour**\n"
+    response += f"**{hour_display}** - {peak_count:,} trips\n\n"
+
+    response += f"### **Busiest Day**\n"
+    response += f"**{peak_day}** - {peak_day_count:,} trips\n\n"
+
+    # Add some insights
+    response += "### **Insights**\n"
+
+    # Time of day insights
+    if peak_hour >= 17 and peak_hour <= 22:
+        response += "*Evening hours are most popular (likely dinner/nightlife)*\n"
+    elif peak_hour >= 11 and peak_hour <= 14:
+        response += "*Lunch hours see peak ridership*\n"
+    elif peak_hour >= 7 and peak_hour <= 10:
+        response += "*Morning commute time is busiest*\n"
+    else:
+        response += "*Peak time is outside typical patterns*\n"
+
+    # Weekend vs weekday
+    if peak_day in ['Saturday', 'Sunday']:
+        response += "*Weekend days are most popular*\n"
+    else:
+        response += "*Weekdays see the highest demand*\n"
+
     return response
 
 def handle_age_insights(df, filters):
@@ -126,14 +264,49 @@ def handle_age_insights(df, filters):
     age_stats = get_age_demographics(df)
 
     if destination:
+        # Strip articles for better matching
+        destination = re.sub(r'\b(the|a|an)\s+', '', destination).strip()
         filtered_df = df[df['Drop Off Address'].str.contains(destination, na=False)]
+
         if len(filtered_df) > 0:
             avg_age = filtered_df['avg_age'].mean()
-            return f"Average age of riders going to locations containing '{filters.get('destination')}' is {avg_age:.1f} years."
+            min_age = filtered_df['min_age'].min()
+            max_age = filtered_df['max_age'].max()
+            original_dest = filters.get('destination', '').title()
+
+            response = f"## Age Demographics Analysis\n\n"
+            response += f"**Destination:** *{original_dest}*\n\n"
+            response += f"### **Average Age**\n"
+            response += f"**{avg_age:.1f} years** for riders going to {original_dest}\n\n"
+            response += f"### **Age Range**\n"
+            response += f"**Youngest group:** {min_age:.0f} years\n"
+            response += f"**Oldest group:** {max_age:.0f} years\n\n"
+
+            # Age category insight
+            if avg_age < 25:
+                response += "### **Insight**\n*This destination attracts a younger crowd (college-age)*"
+            elif avg_age < 35:
+                response += "### **Insight**\n*Popular with young professionals*"
+            elif avg_age < 50:
+                response += "### **Insight**\n*Appeals to middle-aged demographics*"
+            else:
+                response += "### **Insight**\n*Attracts a more mature clientele*"
+
+            return response
         else:
-            return f"No trips found to locations containing '{filters.get('destination')}'."
+            return f"## No Data Found\n\n**Destination:** *{filters.get('destination', '').title()}*\n\n*No trips found to locations containing this keyword*"
     else:
-        return f"Overall average age of riders is {age_stats['avg_age']:.1f} years."
+        response = f"## Overall Demographics\n\n"
+        response += f"### **Average Rider Age**\n"
+        response += f"**{age_stats['avg_age']:.1f} years** across all destinations\n\n"
+        response += f"### **Popular Age-Friendly Destinations**\n"
+
+        # Show top destinations by age
+        top_age_destinations = age_stats['age_by_dest'].head(3)
+        for dest, avg_age in top_age_destinations.items():
+            response += f"- *{dest.title()}* - {avg_age:.1f} years avg\n"
+
+        return response
 
 def handle_group_size(df, filters):
     """
@@ -141,9 +314,35 @@ def handle_group_size(df, filters):
     """
     trip_sizes = df.groupby('Trip ID').size()
     large_groups = trip_sizes[trip_sizes >= 8].count()
+    medium_groups = trip_sizes[(trip_sizes >= 4) & (trip_sizes < 8)].count()
+    small_groups = trip_sizes[trip_sizes < 4].count()
     avg_size = trip_sizes.mean()
+    max_size = trip_sizes.max()
 
-    return f"Average group size is {avg_size:.1f} people. {large_groups} trips had large groups (8+ people)."
+    response = f"## Group Size Analysis\n\n"
+    response += f"### **Average Group Size**\n"
+    response += f"**{avg_size:.1f} people** per trip\n\n"
+
+    response += f"### **Group Distribution**\n"
+    response += f"**Small groups (1-3 people):** {small_groups:,} trips\n"
+    response += f"**Medium groups (4-7 people):** {medium_groups:,} trips\n"
+    response += f"**Large groups (8+ people):** {large_groups:,} trips\n\n"
+
+    response += f"### **Capacity Insights**\n"
+    response += f"**Largest group:** {max_size} people\n"
+
+    # Calculate percentages
+    total_trips = len(trip_sizes)
+    large_pct = (large_groups / total_trips) * 100
+
+    if large_pct > 20:
+        response += f"*High demand for large capacity vehicles ({large_pct:.1f}% are large groups)*"
+    elif large_pct > 10:
+        response += f"*Moderate large group usage ({large_pct:.1f}% are large groups)*"
+    else:
+        response += f"*Most trips are smaller groups ({large_pct:.1f}% are large groups)*"
+
+    return response
 
 # --- 3. SMART ROUTING WITH PATTERN MATCHING ---
 
@@ -159,7 +358,7 @@ def quick_pattern_match(question):
         if destination_match:
             return {"intent": "count_trips", "filters": {"destination": destination_match.group(1).strip()}}
 
-    if re.search(r'\btop\s*\d*\s*destinations?\b', question_lower):
+    if re.search(r'\b(top\s*\d*\s*|most\s+popular\s*|popular\s*)\s*destinations?\b', question_lower):
         limit_match = re.search(r'top\s*(\d+)', question_lower)
         limit = int(limit_match.group(1)) if limit_match else 5
         return {"intent": "top_destinations", "filters": {"limit": limit}}
@@ -354,7 +553,7 @@ example_categories = {
     ],
     "⏰ Time Patterns": [
         "What time do most people ride?",
-        "When is peak riding time?"
+        "What are the busiest days of the week?"
     ],
     "👥 Demographics": [
         "What is the average age of passengers?",

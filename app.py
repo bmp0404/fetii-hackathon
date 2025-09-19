@@ -123,44 +123,127 @@ def get_age_demographics(df):
 
 def handle_count_trips(df, filters):
     """
-    Handles the 'count_trips' intent. This is a reliable, hard-coded function.
-    Filters the DataFrame based on a destination keyword.
+    Handles the 'count_trips' intent with enhanced time and day filtering.
     """
     destination_keyword = filters.get("destination", "").lower()
+    specific_day = filters.get("specific_day", "").lower()
+    time_comparison = filters.get("time_comparison")
+
     if not destination_keyword:
         return "**Error:** You need to specify a destination to count trips."
 
     # Strip common articles for better matching
     destination_keyword = re.sub(r'\b(the|a|an)\s+', '', destination_keyword).strip()
 
-    filtered_df = df[df['Drop Off Address'].str.contains(destination_keyword, na=False)]
-    count = len(filtered_df)
-
-    # Clean response formatting
+    # Start with destination filtering
+    working_df = df[df['Drop Off Address'].str.contains(destination_keyword, na=False)]
     original_dest = filters.get('destination', '').title()
+    filter_description = [f"to {original_dest}"]
 
-    if count == 0:
-        response = f"## Trip Search Results\n\n"
+    # Apply time filters
+    if specific_day:
+        working_df = working_df[working_df['day_of_week'].str.lower() == specific_day]
+        filter_description.append(f"on {specific_day.title()}s")
+
+    if time_comparison == "day_vs_night":
+        day_df = working_df[(working_df['hour_of_day'] >= 6) & (working_df['hour_of_day'] < 18)]
+        night_df = working_df[(working_df['hour_of_day'] >= 18) | (working_df['hour_of_day'] < 6)]
+
+        response = f"## Trip Count Results - Day vs Night\n\n"
         response += f"**Destination:** *{original_dest}*\n\n"
-        response += f"**No trips found** to locations containing '{original_dest}'\n\n"
-        response += "*Try searching with different keywords or check the spelling*"
+
+        day_count = len(day_df)
+        night_count = len(night_df)
+        total_count = day_count + night_count
+
+        response += f"### **Day Trips (6 AM - 6 PM)**\n"
+        response += f"**{day_count:,} trips** to {original_dest}\n\n"
+
+        response += f"### **Night Trips (6 PM - 6 AM)**\n"
+        response += f"**{night_count:,} trips** to {original_dest}\n\n"
+
+        response += f"### **Total & Comparison**\n"
+        response += f"**{total_count:,} total trips** to {original_dest}\n"
+
+        if day_count > night_count:
+            diff = day_count - night_count
+            pct = (day_count / total_count) * 100 if total_count > 0 else 0
+            response += f"**More day trips** (+{diff:,} trips, {pct:.1f}% during day)\n"
+        elif night_count > day_count:
+            diff = night_count - day_count
+            pct = (night_count / total_count) * 100 if total_count > 0 else 0
+            response += f"**More night trips** (+{diff:,} trips, {pct:.1f}% during night)\n"
+        else:
+            response += f"**Equal day and night trips**\n"
+
+        return response
+
+    elif time_comparison == "weekend_vs_weekday":
+        weekend_df = working_df[working_df['day_of_week'].isin(['Saturday', 'Sunday'])]
+        weekday_df = working_df[~working_df['day_of_week'].isin(['Saturday', 'Sunday'])]
+
+        response = f"## Trip Count Results - Weekend vs Weekday\n\n"
+        response += f"**Destination:** *{original_dest}*\n\n"
+
+        weekend_count = len(weekend_df)
+        weekday_count = len(weekday_df)
+        total_count = weekend_count + weekday_count
+
+        response += f"### **Weekend Trips**\n"
+        response += f"**{weekend_count:,} trips** to {original_dest}\n\n"
+
+        response += f"### **Weekday Trips**\n"
+        response += f"**{weekday_count:,} trips** to {original_dest}\n\n"
+
+        response += f"### **Total & Comparison**\n"
+        response += f"**{total_count:,} total trips** to {original_dest}\n"
+
+        if weekend_count > weekday_count:
+            diff = weekend_count - weekday_count
+            pct = (weekend_count / total_count) * 100 if total_count > 0 else 0
+            response += f"**More weekend trips** (+{diff:,} trips, {pct:.1f}% on weekends)\n"
+        elif weekday_count > weekend_count:
+            diff = weekday_count - weekend_count
+            pct = (weekday_count / total_count) * 100 if total_count > 0 else 0
+            response += f"**More weekday trips** (+{diff:,} trips, {pct:.1f}% on weekdays)\n"
+        else:
+            response += f"**Equal weekend and weekday trips**\n"
+
+        return response
+
     else:
-        response = f"## Trip Count Results\n\n"
-        response += f"**Destination:** *{original_dest}*\n\n"
-        response += f"**{count:,} trips** found to locations containing '{original_dest}'\n\n"
+        # Standard filtering with optional day filter
+        count = len(working_df)
 
-        # Show a few examples if there are matches
-        if count > 0:
-            sample_destinations = filtered_df['Drop Off Address'].value_counts().head(3)
-            response += "**Sample Locations:**\n"
-            for dest, dest_count in sample_destinations.items():
-                response += f"- *{dest.title()}* ({dest_count} trips)\n"
+        if count == 0:
+            response = f"## Trip Search Results\n\n"
+            response += f"**Search criteria:** *{', '.join(filter_description)}*\n\n"
+            response += f"**No trips found** matching the specified criteria\n\n"
+            response += "*Try searching with different keywords or check the spelling*"
+        else:
+            response = f"## Trip Count Results\n\n"
+            response += f"**Search criteria:** *{', '.join(filter_description)}*\n\n"
+            response += f"**{count:,} trips** found matching the criteria\n\n"
 
-            if len(sample_destinations) < count:
-                remaining = count - sample_destinations.sum()
-                response += f"- *...and {remaining} more trips*\n"
+            # Show a few examples if there are matches
+            if count > 0:
+                sample_destinations = working_df['Drop Off Address'].value_counts().head(3)
+                response += "**Sample Locations:**\n"
+                for dest, dest_count in sample_destinations.items():
+                    response += f"- *{dest.title()}* ({dest_count} trips)\n"
 
-    return response
+                if len(sample_destinations) < count:
+                    remaining = count - sample_destinations.sum()
+                    response += f"- *...and {remaining} more trips*\n"
+
+                # Add day breakdown if no specific day was requested
+                if not specific_day and count > 10:
+                    day_breakdown = working_df['day_of_week'].value_counts().head(3)
+                    response += f"\n**Popular Days:**\n"
+                    for day, day_count in day_breakdown.items():
+                        response += f"- *{day}* ({day_count} trips)\n"
+
+        return response
 
 def handle_top_destinations(df, filters):
     """
@@ -168,12 +251,36 @@ def handle_top_destinations(df, filters):
     Finds the most frequent drop-off locations with grouped venue variations.
     """
     top_n = filters.get("limit", 5)
-    grouped_stats = get_grouped_destination_stats(df)
+    min_age = filters.get("min_age")
+    max_age = filters.get("max_age")
+
+    # Apply age filtering if specified
+    if min_age is not None and max_age is not None:
+        # Filter trips where average age is in the specified range
+        age_filtered_df = df[(df['avg_age'] >= min_age) & (df['avg_age'] <= max_age)]
+
+        if len(age_filtered_df) == 0:
+            return f"## Top {top_n} Destinations - Ages {min_age}-{max_age}\n\n**No trips found for riders with average age between {min_age} and {max_age} years.**"
+
+        grouped_stats = get_grouped_destination_stats(age_filtered_df)
+        age_suffix = f" - Ages {min_age}-{max_age}"
+        total_filtered_trips = len(age_filtered_df)
+        avg_age_in_range = age_filtered_df['avg_age'].mean()
+    else:
+        grouped_stats = get_grouped_destination_stats(df)
+        age_suffix = ""
+        total_filtered_trips = len(df)
+        avg_age_in_range = None
 
     # Get top N venues by total count
     top_venues = list(grouped_stats.items())[:top_n]
 
-    response = f"## Top {top_n} Most Popular Destinations\n\n"
+    response = f"## Top {top_n} Most Popular Destinations{age_suffix}\n\n"
+
+    if min_age is not None and max_age is not None:
+        response += f"**Age Range:** {min_age}-{max_age} years  \n"
+        response += f"**Trips in range:** {total_filtered_trips:,} trips  \n"
+        response += f"**Average age:** {avg_age_in_range:.1f} years\n\n"
 
     for i, (venue_name, stats) in enumerate(top_venues, 1):
         total_count = stats['total_count']
@@ -202,7 +309,10 @@ def handle_top_destinations(df, filters):
             response += "\n"
 
     response += "---\n"
-    response += f"*Showing destinations with the highest ridership volume*"
+    if min_age is not None and max_age is not None:
+        response += f"*Showing destinations popular with {min_age}-{max_age} year old riders*"
+    else:
+        response += f"*Showing destinations with the highest ridership volume*"
 
     return response
 
@@ -210,101 +320,236 @@ def handle_time_analysis(df, filters):
     """
     Handles time-based questions about ride patterns.
     """
-    time_patterns = get_time_patterns(df)
-    peak_hour = time_patterns['hourly'].idxmax()
-    peak_count = time_patterns['hourly'].max()
-    peak_day = time_patterns['daily'].idxmax()
-    peak_day_count = time_patterns['daily'].max()
+    specific_day = filters.get("day", "").lower()
 
-    # Format hour display
-    hour_display = f"{peak_hour:02d}:00"
-    if peak_hour == 0:
-        hour_display = "12:00 AM"
-    elif peak_hour < 12:
-        hour_display = f"{peak_hour}:00 AM"
-    elif peak_hour == 12:
-        hour_display = "12:00 PM"
+    if specific_day:
+        # Filter data for specific day
+        day_df = df[df['day_of_week'].str.lower() == specific_day]
+        if len(day_df) == 0:
+            return f"## Time Analysis - {specific_day.title()}\n\n**No data found for {specific_day.title()}**"
+
+        # Get hourly patterns for this specific day
+        hourly_pattern = day_df.groupby('hour_of_day').size()
+        peak_hour = hourly_pattern.idxmax() if len(hourly_pattern) > 0 else 0
+        peak_count = hourly_pattern.max() if len(hourly_pattern) > 0 else 0
+        total_day_trips = len(day_df)
+
+        # Format hour display
+        hour_display = f"{peak_hour:02d}:00"
+        if peak_hour == 0:
+            hour_display = "12:00 AM"
+        elif peak_hour < 12:
+            hour_display = f"{peak_hour}:00 AM"
+        elif peak_hour == 12:
+            hour_display = "12:00 PM"
+        else:
+            hour_display = f"{peak_hour-12}:00 PM"
+
+        response = f"## Time Analysis - {specific_day.title()}\n\n"
+        response += f"### **Peak Hour on {specific_day.title()}**\n"
+        response += f"**{hour_display}** - {peak_count:,} trips\n\n"
+        response += f"### **Total {specific_day.title()} Trips**\n"
+        response += f"**{total_day_trips:,} trips** across all hours\n\n"
+
+        # Show top 3 hours for this day
+        top_hours = hourly_pattern.nlargest(3)
+        response += f"### **Top Hours on {specific_day.title()}**\n"
+        for hour, count in top_hours.items():
+            if hour == 0:
+                hour_display = "12:00 AM"
+            elif hour < 12:
+                hour_display = f"{hour}:00 AM"
+            elif hour == 12:
+                hour_display = "12:00 PM"
+            else:
+                hour_display = f"{hour-12}:00 PM"
+            response += f"- **{hour_display}** - {count:,} trips\n"
+
+        return response
+
     else:
-        hour_display = f"{peak_hour-12}:00 PM"
+        # Original logic for overall patterns
+        time_patterns = get_time_patterns(df)
+        peak_hour = time_patterns['hourly'].idxmax()
+        peak_count = time_patterns['hourly'].max()
+        peak_day = time_patterns['daily'].idxmax()
+        peak_day_count = time_patterns['daily'].max()
 
-    response = f"## Ride Time Analysis\n\n"
+        # Format hour display
+        hour_display = f"{peak_hour:02d}:00"
+        if peak_hour == 0:
+            hour_display = "12:00 AM"
+        elif peak_hour < 12:
+            hour_display = f"{peak_hour}:00 AM"
+        elif peak_hour == 12:
+            hour_display = "12:00 PM"
+        else:
+            hour_display = f"{peak_hour-12}:00 PM"
 
-    response += f"### **Peak Hour**\n"
-    response += f"**{hour_display}** - {peak_count:,} trips\n\n"
+        response = f"## Ride Time Analysis\n\n"
 
-    response += f"### **Busiest Day**\n"
-    response += f"**{peak_day}** - {peak_day_count:,} trips\n\n"
+        response += f"### **Peak Hour**\n"
+        response += f"**{hour_display}** - {peak_count:,} trips\n\n"
 
-    # Add some insights
-    response += "### **Insights**\n"
+        response += f"### **Busiest Day**\n"
+        response += f"**{peak_day}** - {peak_day_count:,} trips\n\n"
 
-    # Time of day insights
-    if peak_hour >= 17 and peak_hour <= 22:
-        response += "*Evening hours are most popular (likely dinner/nightlife)*\n"
-    elif peak_hour >= 11 and peak_hour <= 14:
-        response += "*Lunch hours see peak ridership*\n"
-    elif peak_hour >= 7 and peak_hour <= 10:
-        response += "*Morning commute time is busiest*\n"
-    else:
-        response += "*Peak time is outside typical patterns*\n"
+        # Add some insights
+        response += "### **Insights**\n"
 
-    # Weekend vs weekday
-    if peak_day in ['Saturday', 'Sunday']:
-        response += "*Weekend days are most popular*\n"
-    else:
-        response += "*Weekdays see the highest demand*\n"
+        # Time of day insights
+        if peak_hour >= 17 and peak_hour <= 22:
+            response += "*Evening hours are most popular (likely dinner/nightlife)*\n"
+        elif peak_hour >= 11 and peak_hour <= 14:
+            response += "*Lunch hours see peak ridership*\n"
+        elif peak_hour >= 7 and peak_hour <= 10:
+            response += "*Morning commute time is busiest*\n"
+        else:
+            response += "*Peak time is outside typical patterns*\n"
 
-    return response
+        # Weekend vs weekday
+        if peak_day in ['Saturday', 'Sunday']:
+            response += "*Weekend days are most popular*\n"
+        else:
+            response += "*Weekdays see the highest demand*\n"
+
+        return response
 
 def handle_age_insights(df, filters):
     """
-    Handles age-related demographic questions.
+    Handles age-related demographic questions with enhanced filtering.
     """
     destination = filters.get("destination", "").lower()
-    age_stats = get_age_demographics(df)
+    specific_day = filters.get("specific_day", "").lower()
+    time_comparison = filters.get("time_comparison")
+    age_comparison = filters.get("age_comparison")
 
+    # Start with the full dataset
+    working_df = df.copy()
+    filter_description = []
+
+    # Apply destination filter
     if destination:
-        # Strip articles for better matching
         destination = re.sub(r'\b(the|a|an)\s+', '', destination).strip()
-        filtered_df = df[df['Drop Off Address'].str.contains(destination, na=False)]
+        working_df = working_df[working_df['Drop Off Address'].str.contains(destination, na=False)]
+        filter_description.append(f"to {filters.get('destination', '').title()}")
 
-        if len(filtered_df) > 0:
-            avg_age = filtered_df['avg_age'].mean()
-            min_age = filtered_df['min_age'].min()
-            max_age = filtered_df['max_age'].max()
-            original_dest = filters.get('destination', '').title()
+    # Apply day filter
+    if specific_day:
+        working_df = working_df[working_df['day_of_week'].str.lower() == specific_day]
+        filter_description.append(f"on {specific_day.title()}s")
 
-            response = f"## Age Demographics Analysis\n\n"
-            response += f"**Destination:** *{original_dest}*\n\n"
-            response += f"### **Average Age**\n"
-            response += f"**{avg_age:.1f} years** for riders going to {original_dest}\n\n"
-            response += f"### **Age Range**\n"
-            response += f"**Youngest group:** {min_age:.0f} years\n"
-            response += f"**Oldest group:** {max_age:.0f} years\n\n"
+    # Handle time comparisons
+    if time_comparison == "day_vs_night":
+        day_df = working_df[(working_df['hour_of_day'] >= 6) & (working_df['hour_of_day'] < 18)]
+        night_df = working_df[(working_df['hour_of_day'] >= 18) | (working_df['hour_of_day'] < 6)]
 
-            # Age category insight
-            if avg_age < 25:
-                response += "### **Insight**\n*This destination attracts a younger crowd (college-age)*"
-            elif avg_age < 35:
-                response += "### **Insight**\n*Popular with young professionals*"
-            elif avg_age < 50:
-                response += "### **Insight**\n*Appeals to middle-aged demographics*"
-            else:
-                response += "### **Insight**\n*Attracts a more mature clientele*"
+        response = f"## Age Demographics - Day vs Night"
+        if filter_description:
+            response += f" ({', '.join(filter_description)})"
+        response += "\n\n"
 
-            return response
+        if len(day_df) > 0:
+            day_avg = day_df['avg_age'].mean()
+            day_min = day_df['min_age'].min()
+            day_max = day_df['max_age'].max()
         else:
-            return f"## No Data Found\n\n**Destination:** *{filters.get('destination', '').title()}*\n\n*No trips found to locations containing this keyword*"
-    else:
-        response = f"## Overall Demographics\n\n"
-        response += f"### **Average Rider Age**\n"
-        response += f"**{age_stats['avg_age']:.1f} years** across all destinations\n\n"
-        response += f"### **Popular Age-Friendly Destinations**\n"
+            day_avg = day_min = day_max = 0
 
-        # Show top destinations by age
-        top_age_destinations = age_stats['age_by_dest'].head(3)
-        for dest, avg_age in top_age_destinations.items():
-            response += f"- *{dest.title()}* - {avg_age:.1f} years avg\n"
+        if len(night_df) > 0:
+            night_avg = night_df['avg_age'].mean()
+            night_min = night_df['min_age'].min()
+            night_max = night_df['max_age'].max()
+        else:
+            night_avg = night_min = night_max = 0
+
+        response += f"### **Day Trips (6 AM - 6 PM)**\n"
+        response += f"**Average age:** {day_avg:.1f} years\n"
+        response += f"**Age range:** {day_min:.0f} - {day_max:.0f} years\n"
+        response += f"**Total trips:** {len(day_df):,}\n\n"
+
+        response += f"### **Night Trips (6 PM - 6 AM)**\n"
+        response += f"**Average age:** {night_avg:.1f} years\n"
+        response += f"**Age range:** {night_min:.0f} - {night_max:.0f} years\n"
+        response += f"**Total trips:** {len(night_df):,}\n\n"
+
+        # Comparison
+        response += f"### **Comparison**\n"
+        if day_avg > night_avg:
+            diff = day_avg - night_avg
+            response += f"**Day riders are older** on average (+{diff:.1f} years)\n"
+        elif night_avg > day_avg:
+            diff = night_avg - day_avg
+            response += f"**Night riders are older** on average (+{diff:.1f} years)\n"
+        else:
+            response += f"**Similar ages** between day and night riders\n"
+
+        return response
+
+    elif age_comparison == "young_vs_old":
+        # Split into young (under 25) and older (25+) demographics
+        young_df = working_df[working_df['avg_age'] < 25]
+        older_df = working_df[working_df['avg_age'] >= 25]
+
+        response = f"## Age Demographics - Young vs Older Riders"
+        if filter_description:
+            response += f" ({', '.join(filter_description)})"
+        response += "\n\n"
+
+        response += f"### **Young Riders (Under 25)**\n"
+        response += f"**Average age:** {young_df['avg_age'].mean():.1f} years\n"
+        response += f"**Total trips:** {len(young_df):,}\n\n"
+
+        response += f"### **Older Riders (25+)**\n"
+        response += f"**Average age:** {older_df['avg_age'].mean():.1f} years\n"
+        response += f"**Total trips:** {len(older_df):,}\n\n"
+
+        # Show top destinations for each group
+        if len(young_df) > 0:
+            young_destinations = young_df['Drop Off Address'].value_counts().head(3)
+            response += f"### **Popular with Young Riders**\n"
+            for dest, count in young_destinations.items():
+                response += f"- *{dest.title()}* ({count} trips)\n"
+            response += "\n"
+
+        if len(older_df) > 0:
+            older_destinations = older_df['Drop Off Address'].value_counts().head(3)
+            response += f"### **Popular with Older Riders**\n"
+            for dest, count in older_destinations.items():
+                response += f"- *{dest.title()}* ({count} trips)\n"
+
+        return response
+
+    else:
+        # Standard single-filter analysis
+        if len(working_df) == 0:
+            return f"## No Data Found\n\n*No trips found matching the specified criteria*"
+
+        avg_age = working_df['avg_age'].mean()
+        min_age = working_df['min_age'].min()
+        max_age = working_df['max_age'].max()
+
+        response = f"## Age Demographics Analysis"
+        if filter_description:
+            response += f" ({', '.join(filter_description)})"
+        response += "\n\n"
+
+        response += f"### **Average Age**\n"
+        response += f"**{avg_age:.1f} years**\n\n"
+        response += f"### **Age Range**\n"
+        response += f"**Youngest group:** {min_age:.0f} years\n"
+        response += f"**Oldest group:** {max_age:.0f} years\n"
+        response += f"**Total trips:** {len(working_df):,}\n\n"
+
+        # Age category insight
+        if avg_age < 25:
+            response += "### **Insight**\n*Attracts a younger crowd (college-age)*"
+        elif avg_age < 35:
+            response += "### **Insight**\n*Popular with young professionals*"
+        elif avg_age < 50:
+            response += "### **Insight**\n*Appeals to middle-aged demographics*"
+        else:
+            response += "### **Insight**\n*Attracts a more mature clientele*"
 
         return response
 
@@ -312,67 +557,343 @@ def handle_group_size(df, filters):
     """
     Handles questions about group sizes and ride capacity.
     """
-    trip_sizes = df.groupby('Trip ID').size()
-    large_groups = trip_sizes[trip_sizes >= 8].count()
-    medium_groups = trip_sizes[(trip_sizes >= 4) & (trip_sizes < 8)].count()
-    small_groups = trip_sizes[trip_sizes < 4].count()
-    avg_size = trip_sizes.mean()
-    max_size = trip_sizes.max()
+    compare_time = filters.get("compare_time")
 
-    response = f"## Group Size Analysis\n\n"
-    response += f"### **Average Group Size**\n"
-    response += f"**{avg_size:.1f} people** per trip\n\n"
+    if compare_time == "day_vs_night":
+        # Load the raw checkins data to get actual passenger counts per trip
+        import pandas as pd
+        checkins_df = pd.read_excel('fetii_data.xlsx', sheet_name='Checked in User ID\'s')
 
-    response += f"### **Group Distribution**\n"
-    response += f"**Small groups (1-3 people):** {small_groups:,} trips\n"
-    response += f"**Medium groups (4-7 people):** {medium_groups:,} trips\n"
-    response += f"**Large groups (8+ people):** {large_groups:,} trips\n\n"
+        # Split trips into day (6 AM - 6 PM) and night (6 PM - 6 AM)
+        day_trips = df[(df['hour_of_day'] >= 6) & (df['hour_of_day'] < 18)]
+        night_trips = df[(df['hour_of_day'] >= 18) | (df['hour_of_day'] < 6)]
 
-    response += f"### **Capacity Insights**\n"
-    response += f"**Largest group:** {max_size} people\n"
+        # Get group sizes for day trips
+        day_trip_ids = day_trips['Trip ID'].unique()
+        day_checkins = checkins_df[checkins_df['Trip ID'].isin(day_trip_ids)]
+        day_trip_sizes = day_checkins.groupby('Trip ID').size()
 
-    # Calculate percentages
-    total_trips = len(trip_sizes)
-    large_pct = (large_groups / total_trips) * 100
+        # Get group sizes for night trips
+        night_trip_ids = night_trips['Trip ID'].unique()
+        night_checkins = checkins_df[checkins_df['Trip ID'].isin(night_trip_ids)]
+        night_trip_sizes = night_checkins.groupby('Trip ID').size()
 
-    if large_pct > 20:
-        response += f"*High demand for large capacity vehicles ({large_pct:.1f}% are large groups)*"
-    elif large_pct > 10:
-        response += f"*Moderate large group usage ({large_pct:.1f}% are large groups)*"
+        response = f"## Group Size Analysis - Day vs Night\n\n"
+
+        # Day analysis
+        if len(day_trip_sizes) > 0:
+            day_avg = day_trip_sizes.mean()
+            day_large = (day_trip_sizes >= 8).sum()
+            day_large_pct = (day_large / len(day_trip_sizes)) * 100
+            day_max = day_trip_sizes.max()
+        else:
+            day_avg = 0
+            day_large = 0
+            day_large_pct = 0
+            day_max = 0
+
+        # Night analysis
+        if len(night_trip_sizes) > 0:
+            night_avg = night_trip_sizes.mean()
+            night_large = (night_trip_sizes >= 8).sum()
+            night_large_pct = (night_large / len(night_trip_sizes)) * 100
+            night_max = night_trip_sizes.max()
+        else:
+            night_avg = 0
+            night_large = 0
+            night_large_pct = 0
+            night_max = 0
+
+        response += f"### **Day Trips (6 AM - 6 PM)**\n"
+        response += f"**Average group size:** {day_avg:.1f} people\n"
+        response += f"**Total trips:** {len(day_trip_sizes):,}\n"
+        response += f"**Large groups (8+):** {day_large:,} ({day_large_pct:.1f}%)\n"
+        response += f"**Largest group:** {day_max} people\n\n"
+
+        response += f"### **Night Trips (6 PM - 6 AM)**\n"
+        response += f"**Average group size:** {night_avg:.1f} people\n"
+        response += f"**Total trips:** {len(night_trip_sizes):,}\n"
+        response += f"**Large groups (8+):** {night_large:,} ({night_large_pct:.1f}%)\n"
+        response += f"**Largest group:** {night_max} people\n\n"
+
+        # Comparison insights
+        response += f"### **Comparison**\n"
+        if day_avg > night_avg:
+            diff = day_avg - night_avg
+            response += f"**Day trips have larger groups** on average (+{diff:.1f} people)\n"
+        elif night_avg > day_avg:
+            diff = night_avg - day_avg
+            response += f"**Night trips have larger groups** on average (+{diff:.1f} people)\n"
+        else:
+            response += f"**Similar group sizes** between day and night\n"
+
+        if day_large_pct > night_large_pct:
+            response += f"**Day trips more likely to be large groups** ({day_large_pct:.1f}% vs {night_large_pct:.1f}%)\n"
+        elif night_large_pct > day_large_pct:
+            response += f"**Night trips more likely to be large groups** ({night_large_pct:.1f}% vs {day_large_pct:.1f}%)\n"
+
+        return response
+
     else:
-        response += f"*Most trips are smaller groups ({large_pct:.1f}% are large groups)*"
+        # Original logic for overall group size analysis
+        import pandas as pd
+        checkins_df = pd.read_excel('fetii_data.xlsx', sheet_name='Checked in User ID\'s')
+        trip_sizes = checkins_df.groupby('Trip ID').size()
+
+        large_groups = trip_sizes[trip_sizes >= 8].count()
+        medium_groups = trip_sizes[(trip_sizes >= 4) & (trip_sizes < 8)].count()
+        small_groups = trip_sizes[trip_sizes < 4].count()
+        avg_size = trip_sizes.mean()
+        max_size = trip_sizes.max()
+
+        response = f"## Group Size Analysis\n\n"
+        response += f"### **Average Group Size**\n"
+        response += f"**{avg_size:.1f} people** per trip\n\n"
+
+        response += f"### **Group Distribution**\n"
+        response += f"**Small groups (1-3 people):** {small_groups:,} trips\n"
+        response += f"**Medium groups (4-7 people):** {medium_groups:,} trips\n"
+        response += f"**Large groups (8+ people):** {large_groups:,} trips\n\n"
+
+        response += f"### **Capacity Insights**\n"
+        response += f"**Largest group:** {max_size} people\n"
+
+        # Calculate percentages
+        total_trips = len(trip_sizes)
+        large_pct = (large_groups / total_trips) * 100
+
+        if large_pct > 20:
+            response += f"*High demand for large capacity vehicles ({large_pct:.1f}% are large groups)*"
+        elif large_pct > 10:
+            response += f"*Moderate large group usage ({large_pct:.1f}% are large groups)*"
+        else:
+            response += f"*Most trips are smaller groups ({large_pct:.1f}% are large groups)*"
+
+        return response
+
+def handle_distance_query(df, filters):
+    """
+    Handles distance/route-related questions with helpful explanation.
+    """
+    response = f"## Distance Analysis Not Available\n\n"
+    response += f"**Data Available:**\n"
+    response += f"- Pickup coordinates (latitude/longitude)\n"
+    response += f"- Drop-off coordinates (latitude/longitude)\n"
+    response += f"- **{len(df):,} total trips** with coordinate data\n\n"
+
+    response += f"**What's Missing:**\n"
+    response += f"- Pre-calculated distances are not included in the dataset\n"
+    response += f"- Route information and travel times are not available\n\n"
+
+    response += f"**Alternative Analysis:**\n"
+    response += f"Instead of distance-based analysis, I can help with:\n"
+    response += f"- **Popular destinations** by trip volume\n"
+    response += f"- **Time patterns** (peak hours, busy days)\n"
+    response += f"- **Group size analysis** and capacity insights\n"
+    response += f"- **Age demographics** by destination or time\n\n"
+
+    response += f"*Try asking: 'What are the most popular destinations?' or 'What time do most people ride?'*"
+
+    return response
+
+def handle_predictive_query(df, filters):
+    """
+    Handles future/predictive questions that cannot be answered with historical data.
+    """
+    response = f"## Predictive Analysis Not Available\n\n"
+    response += f"**Data Type:** Historical rideshare data\n"
+    response += f"**Time Period:** Past trips only (no future data)\n"
+    response += f"**Total Records:** {len(df):,} completed trips\n\n"
+
+    response += f"**What I Cannot Predict:**\n"
+    response += f"- Future ridership or demand\n"
+    response += f"- Next week/weekend trip volumes\n"
+    response += f"- Upcoming passenger counts\n"
+    response += f"- Future destination popularity\n\n"
+
+    response += f"**What I Can Analyze:**\n"
+    response += f"Instead of predicting the future, I can show you **historical patterns**:\n"
+    response += f"- **Past weekend trends** - 'How many trips happened on weekends?'\n"
+    response += f"- **Historical patterns** - 'What was the busiest time last month?'\n"
+    response += f"- **Destination history** - 'How popular was Rainey Street historically?'\n"
+    response += f"- **Group size patterns** - 'What was the average group size on weekends?'\n\n"
+
+    response += f"*Try asking about historical data: 'How many people went to Rainey Street on past weekends?'*"
 
     return response
 
 # --- 3. SMART ROUTING WITH PATTERN MATCHING ---
 
+def extract_universal_filters(question):
+    """Extract common filters that can be applied across different intents"""
+    question_lower = question.lower()
+    filters = {}
+
+    # Time-based filters
+    day_match = re.search(r'\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b', question_lower)
+    if day_match:
+        filters["specific_day"] = day_match.group(1)
+
+    # Day vs night comparison
+    if re.search(r'(day\s+vs\s+night|night\s+vs\s+day|day.*night.*difference|night.*day.*difference)', question_lower):
+        filters["time_comparison"] = "day_vs_night"
+
+    # Weekend vs weekday
+    if re.search(r'(weekend.*weekday|weekday.*weekend|weekend.*vs.*weekday|weekday.*vs.*weekend)', question_lower):
+        filters["time_comparison"] = "weekend_vs_weekday"
+
+    # Age ranges
+    age_range_match = re.search(r'age.*between\s+(\d+)\s+and\s+(\d+)', question_lower)
+    if age_range_match:
+        filters["min_age"] = int(age_range_match.group(1))
+        filters["max_age"] = int(age_range_match.group(2))
+
+    # Young vs old comparison
+    if re.search(r'(young.*old|old.*young|young.*vs.*old|old.*vs.*young)', question_lower):
+        filters["age_comparison"] = "young_vs_old"
+
+    # Destination filtering
+    destination_patterns = [
+        r'to\s+([^?]+?)(?:\s+(?:on|during|for)|\s*\?|$)',
+        r'going.*to\s+([^?]+?)(?:\s+(?:on|during|for)|\s*\?|$)',
+        r'at\s+([^?]+?)(?:\s+(?:on|during|for)|\s*\?|$)'
+    ]
+    for pattern in destination_patterns:
+        dest_match = re.search(pattern, question_lower)
+        if dest_match:
+            destination = dest_match.group(1).strip()
+            # Clean up common words that aren't part of destination
+            destination = re.sub(r'\b(the|a|an)\s+', '', destination).strip()
+            if len(destination) > 2:  # Avoid single letters or very short matches
+                filters["destination"] = destination
+                break
+
+    return filters
+
+def assess_query_complexity(question, filters):
+    """Determine if query should go to agent or direct path"""
+    question_lower = question.lower()
+
+    # Count distinct filter types
+    filter_types = len([k for k in filters.keys() if k not in ['limit']])
+
+    # Complex analytical language
+    complex_keywords = [
+        r'\bcorrelation\b|\brelationship\b|\bcompare.*between\b',
+        r'\bpercentage\b|\bincrease\b|\bdecrease\b|\btrend\b',
+        r'\bpredict\b|\bforecast\b|\bif.*then\b',
+        r'\banalyz\w+\b|\bstatistic\w+\b|\bcalculat\w+\b',
+        r'\bwhy\b|\bhow.*affect\b|\bimpact\b|\bcause\b'
+    ]
+
+    # Distance/route questions that should be handled specially
+    distance_keywords = [
+        r'\bdistance\b|\bmiles?\b|\bkilometer\b|\bkm\b',
+        r'\blonger than\b|\bshorter than\b|\bfurther than\b',
+        r'\broute\b|\btravel time\b|\bduration\b'
+    ]
+
+    # Predictive/future questions that cannot be answered
+    predictive_keywords = [
+        r'\bwill\b|\bwould\b|\bshall\b|\bgoing to\b',
+        r'\bnext\s+(week|month|year|weekend|friday|saturday|sunday)\b',
+        r'\btomorrow\b|\blater\b|\bfuture\b|\bupcoming\b',
+        r'\bpredict\b|\bforecast\b|\bexpect\b|\bestimate\b'
+    ]
+
+    has_distance_query = any(re.search(pattern, question_lower) for pattern in distance_keywords)
+    has_predictive_query = any(re.search(pattern, question_lower) for pattern in predictive_keywords)
+
+    has_complex_language = any(re.search(pattern, question_lower) for pattern in complex_keywords)
+
+    # Route distance queries to special handler instead of agent
+    if has_distance_query:
+        return "distance_query"
+
+    # Route predictive queries to special handler
+    if has_predictive_query:
+        return "predictive_query"
+
+    # Route to agent if:
+    # - 3+ filter types OR
+    # - Complex analytical language OR
+    # - Very specific multi-dimensional questions
+    if filter_types >= 3 or has_complex_language:
+        return "agent_fallback"
+
+    return "direct_path"
+
 def quick_pattern_match(question):
     """
-    Check for obvious patterns before using AI router to save API calls.
+    Enhanced pattern matching with universal filter support and complexity assessment.
     """
     question_lower = question.lower()
 
-    # Simple pattern matching for common questions
+    # Extract universal filters first
+    universal_filters = extract_universal_filters(question)
+
+    # Assess complexity - route to agent if too complex
+    complexity = assess_query_complexity(question, universal_filters)
+    if complexity == "agent_fallback":
+        return {"intent": "agent_fallback", "filters": {}}
+    elif complexity == "distance_query":
+        return {"intent": "distance_query", "filters": {}}
+    elif complexity == "predictive_query":
+        return {"intent": "predictive_query", "filters": {}}
+
+    # Intent-specific pattern matching with enhanced filters
     if re.search(r'\bhow many.*trips?.*to\b', question_lower):
-        destination_match = re.search(r'to\s+([^?]+)', question_lower)
-        if destination_match:
-            return {"intent": "count_trips", "filters": {"destination": destination_match.group(1).strip()}}
+        filters = {"destination": universal_filters.get("destination", "")}
+        # Add time-based filters
+        if "specific_day" in universal_filters:
+            filters["specific_day"] = universal_filters["specific_day"]
+        if "time_comparison" in universal_filters:
+            filters["time_comparison"] = universal_filters["time_comparison"]
+
+        if filters["destination"]:  # Only proceed if we found a destination
+            return {"intent": "count_trips", "filters": filters}
 
     if re.search(r'\b(top\s*\d*\s*|most\s+popular\s*|popular\s*)\s*destinations?\b', question_lower):
         limit_match = re.search(r'top\s*(\d+)', question_lower)
         limit = int(limit_match.group(1)) if limit_match else 5
-        return {"intent": "top_destinations", "filters": {"limit": limit}}
+
+        filters = {"limit": limit}
+        # Add age filtering from universal filters
+        if "min_age" in universal_filters and "max_age" in universal_filters:
+            filters["min_age"] = universal_filters["min_age"]
+            filters["max_age"] = universal_filters["max_age"]
+
+        return {"intent": "top_destinations", "filters": filters}
 
     if re.search(r'\btime\b|\bhour\b|\bwhen\b|\bpeak\b', question_lower):
-        return {"intent": "time_analysis", "filters": {}}
+        filters = {}
+        # Use universal filter for specific day
+        if "specific_day" in universal_filters:
+            filters["day"] = universal_filters["specific_day"]
+
+        return {"intent": "time_analysis", "filters": filters}
 
     if re.search(r'\bage\b|\bold\b|\byoung\b', question_lower):
-        destination_match = re.search(r'(going to|to)\s+([^?]+)', question_lower)
-        filters = {"destination": destination_match.group(2).strip()} if destination_match else {}
+        filters = {}
+        # Add all relevant universal filters
+        if "destination" in universal_filters:
+            filters["destination"] = universal_filters["destination"]
+        if "specific_day" in universal_filters:
+            filters["specific_day"] = universal_filters["specific_day"]
+        if "time_comparison" in universal_filters:
+            filters["time_comparison"] = universal_filters["time_comparison"]
+        if "age_comparison" in universal_filters:
+            filters["age_comparison"] = universal_filters["age_comparison"]
+
         return {"intent": "age_insights", "filters": filters}
 
     if re.search(r'\bgroup size\b|\blarge group\b|\bhow many people\b', question_lower):
-        return {"intent": "group_size", "filters": {}}
+        filters = {}
+        # Add time comparison from universal filters
+        if "time_comparison" in universal_filters:
+            filters["compare_time"] = universal_filters["time_comparison"]
+
+        return {"intent": "group_size", "filters": filters}
 
     return None  # No pattern match, use AI router
 
@@ -601,6 +1122,10 @@ if st.button("Get Answer"):
                 response = handle_age_insights(master_df, filters)
             elif intent == "group_size":
                 response = handle_group_size(master_df, filters)
+            elif intent == "distance_query":
+                response = handle_distance_query(master_df, filters)
+            elif intent == "predictive_query":
+                response = handle_predictive_query(master_df, filters)
             else: # Fallback to the agent
                 with st.spinner("Analyzing complex question with AI agent..."):
                     response = run_agent_query(master_df, user_question)

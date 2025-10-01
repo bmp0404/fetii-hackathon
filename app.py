@@ -1147,9 +1147,7 @@ with st.expander("🎯 **Advanced Question Examples**", expanded=False):
     complex_cols = st.columns(2)
     complex_questions = [
         "What's the correlation between age and group size?",
-        "Analyze the relationship between destination and time patterns",
         "Calculate the percentage increase in ridership trends",
-        "Why do certain destinations attract younger riders?"
     ]
 
     for i, question in enumerate(complex_questions):
